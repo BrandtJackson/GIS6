@@ -1,0 +1,332 @@
+---
+title: "GIS_FINAL"
+author: "Brandt Jackson"
+date: "March 8, 2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Brandt Jackson - GIS Final
+
+### Read in libraries
+
+```{r}
+# Module 5: Point Pattern Analysis Using R, Part 1
+
+library(GISTools)
+library(raster)
+library(spatstat)
+
+library(ggmap)
+library(jsonlite)
+library(gapminder)
+library(GISTools)
+library(sf)
+library(dplyr)
+library(rgdal)
+library(tmap)
+
+require(deldir)
+require(sp)
+
+library(ggmap)
+
+
+#library(sf)
+library(dplyr)
+library(spDataLarge)
+library(stplanr)      # geographic transport data package
+#library(tmap)         # visualization package (see Chapter 8)
+library(osmdata)
+
+```
+
+
+
+## Read in Bristol Region OSM Data - SF Polygon Object
+```{r}
+bristol_region = osmdata::getbb("Bristol", format_out = "sf_polygon")
+```
+
+## View Names of Bristol Zones - "geo_code", "name" and "geometry"
+
+```{r}
+names(bristol_zones)
+
+```
+
+```{r}
+summary(bristol_od)
+```
+
+## EDA - View Number of rows for bristol_od and bristol_zones
+
+```{r}
+nrow(bristol_od)
+#> [1] 2910
+nrow(bristol_zones)
+#> [1] 102
+
+```
+
+## ETL - Tranform bristol_od and assign zones_attr
+```{r}
+zones_attr = bristol_od %>% 
+  group_by(o) %>% 
+  summarize_if(is.numeric, sum) %>% 
+  dplyr::rename(geo_code = o)
+```
+
+## Summarize zones_attr$geo_code
+```{r}
+summary(zones_attr$geo_code %in% bristol_zones$geo_code)
+#>    Mode    TRUE 
+#> logical     102
+```
+
+## More ETL - Define zones_joined
+```{r}
+zones_joined = left_join(bristol_zones, zones_attr, by = "geo_code")
+sum(zones_joined$all)
+#> [1] 238805
+names(zones_joined)
+#> [1] "geo_code"   "name"       "all"        "bicycle"    "foot"      
+#> [6] "car_driver" "train"      "geometry"
+```
+## Even more ETL - zones_od 
+```{r}
+zones_od = bristol_od %>% 
+  group_by(d) %>% 
+  summarize_if(is.numeric, sum) %>% 
+  dplyr::select(geo_code = d, all_dest = all) %>% 
+  inner_join(zones_joined, ., by = "geo_code")
+```
+
+## Initial plot of Bristol region, origin and destination
+```{r}
+qtm(zones_od, c("all", "all_dest")) +
+  tm_layout(panel.labels = c("Origin", "Destination"))
+```
+
+
+```{r}
+od_top5 = bristol_od %>% 
+  arrange(desc(all)) %>% 
+  top_n(5, wt = all)
+```
+
+## Travel to Work Area (TTWA) for Bristol
+```{r}
+bristol_ttwa
+```
+
+## Assigning ACTIVE to both BICYCLE and FOOT routes
+```{r}
+bristol_od$Active = (bristol_od$bicycle + bristol_od$foot) /
+  bristol_od$all * 100
+```
+
+## More ETL
+```{r}
+od_intra = filter(bristol_od, o == d)
+od_inter = filter(bristol_od, o != d)
+```
+
+## Defining the "DESIRE LINES"
+
+## Desire Lines are "Spider Diagrams" that can be either weighted or unweighted based on whether the importance of each route is equal.  
+## Desire lines will be shown as wider in the charts if they are weighted.  
+```{r}
+desire_lines = od2line(od_inter, zones_od)
+#> Creating centroids representing desire line start and end points.
+```
+
+## Charting Desire Lines for Bristol
+```{r}
+qtm(desire_lines, lines.lwd = "all")
+```
+## Calculating Distance of Desire Lines
+```{r}
+desire_lines$distance = as.numeric(st_length(desire_lines))
+#desire_carshort = dplyr::filter(desire_lines, car_driver > 300 & distance < 5000)
+
+
+```
+
+
+```{r}
+#route_osrm
+```
+
+```{r}
+#route_carshort = line2route(desire_carshort, route_fun = route_osrm)
+```
+
+## Car Path
+```{r}
+desire_carshort$geom_car = st_geometry(route_carshort)
+```
+
+## Rail Path
+```{r}
+desire_rail = top_n(desire_lines, n = 3, wt = train)
+```
+
+## Rail Path with Stations
+```{r}
+ncol(desire_rail)
+#> [1] 10
+desire_rail = line_via(desire_rail, bristol_stations)
+ncol(desire_rail)
+#> [1] 13
+```
+
+## Summarize the bristol_ways 
+```{r}
+summary(bristol_ways)
+```
+
+
+## Freeway routes with weighting analysis
+```{r}
+ways_freeway = bristol_ways %>% filter(maxspeed == "70 mph") 
+ways_sln = SpatialLinesNetwork(ways_freeway)
+#> Warning in SpatialLinesNetwork.sf(ways_freeway): Graph composed of multiple
+#> subgraphs, consider cleaning it with sln_clean_graph().
+slotNames(ways_sln)
+#> [1] "sl"          "g"           "nb"          "weightfield"
+weightfield(ways_sln)
+#> [1] "length"
+class(ways_sln@g)
+#> [1] "igraph"
+```
+
+## Cycle routes
+
+```{r}
+e = igraph::edge_betweenness(ways_sln@g)
+plot(ways_sln@sl$geometry, lwd = e / 500)
+```
+```{r}
+#route_rail = desire_rail %>% 
+  #st_set_geometry("leg_orig") %>% 
+  #line2route(route_fun = route_osrm) %>% 
+  #st_set_crs(4326)
+
+
+```
+
+
+```{r}
+route_cycleway = rbind(route_rail, route_carshort)
+route_cycleway$all = c(desire_rail$all, desire_carshort$all)
+```
+
+```{r}
+summary(route_rail)
+
+```
+```{r}
+summary(route_carshort)
+```
+
+```{r}
+summary(route_cycleway)
+```
+
+## Cycle Routes analysis
+```{r}
+qtm(zones_od, c("all", "all_dest")) +
+  tm_layout(panel.labels = c("Origin", "Destination"))
+
+qtm(route_cycleway, lines.lwd = "all")
+
+```
+
+```{r}
+qtm(zones_od, c("all", "all_dest")) +
+  tm_layout(panel.labels = c("Origin", "Destination")) + qtm(route_cycleway, lines.lwd = "all")
+```
+
+# Question 1
+
+## What is the total distance of cycleways that would be constructed if all the routes presented in Figure 12.6 were to be constructed?
+
+# Answer 1
+
+## Below are two ways of arriving at the same answer, within a small margin.  (~42K)
+
+```{r}
+
+sum(route_cycleway$distance)
+sum(st_length(route_cycleway))
+
+#(route_rail, route_carshort)
+
+```
+
+
+# Question 2
+
+## What proportion of trips represented in the desire_lines are accounted for in the route_cycleway object?
+
+# Answer 2
+
+## About 2% (1.966%) of the trips are accounted for in the route_cycleway object. 
+
+```{r}
+sum(route_cycleway$all) / sum(desire_lines$all) # around 2%
+d_intersect = desire_lines[route_cycleway, , op = st_crosses]
+sum(d_intersect$all) / sum(desire_lines$all) # around 2%
+```
+
+
+# Question 3
+
+## The analysis presented in this chapter is designed for teaching how geocomputation methods can be applied to transport research. If you were to do this 'for real' for local government or a transport consultancy, what top 3 things would you do differently?
+
+
+# Answer 3
+
+## Higher level of geographic resolution.
+## Use cycle-specific routing services.
+## Identify key walking routes.
+## Include a higher proportion of trips in the analysis
+
+# Question 4
+
+## Clearly, the routes identified in Figure \@ref(fig:cycleways) only provide part of the picture. How would you extend the analysis to incorporate more trips that could potentially be cycled?
+
+# Answer 4
+
+## I would expand 'route_cycleway' to account for more than just 'route_rail' and 'route_carshort'. We could also adjust how carshort is defined to account for a wider scope of distances.  
+
+```{r}
+
+qtm(route_cycleway, lines.lwd = "all")
+
+```
+
+# Question 5
+
+## Imagine that you want to extend the scenario by creating key *areas* (not routes) for investment in place-based cycling policies such as car-free zones, cycle parking points and reduced car parking strategy. How could raster\index{raster} data assist with this work? 
+
+# Answer 5
+
+## I would create a raster layer on top of the route_cycle pathway (see below), and do a similar analysis on the area within Bristol that we did with the Kansas City and South Carolina maps, but instead using the areas surrounding the route_cycle pathway (black line)
+
+```{r}
+qtm(zones_od, c("all", "all_dest")) +
+  tm_layout(panel.labels = c("Origin", "Destination")) + qtm(route_cycleway, lines.lwd = "all")
+
+```
+
+
+
+
+
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
